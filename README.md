@@ -7,6 +7,7 @@ Transcribe recurring meetings (weekly team meetings, jour fixes, ...) locally on
 - Model: `large-v3-turbo` on the Apple Silicon GPU (downloaded automatically on first run)
 - Languages: detected per utterance, limited to German and English by default, so meetings can switch between them
 - Voice activity detection (Silero) skips silence and room noise, so Whisper doesn't make up text
+- Optional [speaker recognition](#speaker-recognition): who said what, with names that are remembered per meeting series
 - Output: Markdown and text with timestamps, plus a json file, grouped by meeting series:
   `~/Documents/meetscribe/weekly-team/2026-11-09_14-00_weekly-team.md`
 - Settings in a config file, overridable on the command line
@@ -28,10 +29,12 @@ The installer:
 1. Checks that you're on macOS with Apple Silicon
 2. Checks that Homebrew is installed, and prints the install command if it isn't
 3. Installs `ffmpeg` and [`uv`](https://docs.astral.sh/uv/) via brew, skipping any that are already available
-4. Installs the `meetscribe` command with `uv tool install --editable`. uv downloads its own Python (the one macOS ships is too old) and all libraries (about 1 GB the first time). The command lives in `~/.local/bin`; if that isn't on your `PATH`, run `uv tool update-shell` and open a new terminal
+4. Asks whether to include [speaker recognition](#speaker-recognition) (optional, about 200 MB more), then installs the `meetscribe` command with `uv tool install --editable`. uv downloads its own Python (the one macOS ships is too old) and all libraries (about 1 GB the first time). The command lives in `~/.local/bin`; if that isn't on your `PATH`, run `uv tool update-shell` and open a new terminal
 5. Creates `meetscribe.toml` from `meetscribe.toml.example` (an existing config is never overwritten)
 6. Shows the settings and pauses so you can change the model, language or output folder. Press Enter to continue, or `o` to open the config in `$EDITOR` (or your default text editor)
-7. Downloads the model (~1.6 GB for the default), unless it's already there
+7. Downloads the model (~1.6 GB for the default), unless it's already there. With speaker recognition, also checks access to the speaker model and downloads it (see [Setup](#setup))
+
+`./install.sh --speakers` includes speaker recognition without asking, `./install.sh --no-speakers` removes it again. Once installed, re-running the installer keeps it.
 
 Run `./install.sh` again at any time, e.g. after changing the model or pulling a new version. Steps that are already done are skipped. Because the install is editable, changes in this folder take effect without reinstalling (except new dependencies: run `./install.sh` again).
 
@@ -40,7 +43,7 @@ Run `./install.sh` again at any time, e.g. after changing the model or pulling a
 
 ```bash
 brew install ffmpeg uv
-uv tool install --editable .
+uv tool install --editable .              # or '.[speakers]' with speaker recognition
 cp meetscribe.toml.example meetscribe.toml
 meetscribe download-model
 ```
@@ -107,6 +110,8 @@ Press Ctrl+C to end the meeting.
 | `--language LANG` | `de`, `en`, ... or `auto`. A list like `de,en` means auto, limited to those languages |
 | `--prompt "TEXT"` | Names and terms to help Whisper spell them, see [Prompts](#prompts) |
 | `--output-dir DIR` | Where transcripts go (default `~/Documents/meetscribe`) |
+| `--speakers`, `--no-speakers` | Recognize who said what, or don't (default: off, see `[speakers]` in the config) |
+| `--num-speakers N` | Number of people in the meeting, if known. Implies `--speakers` |
 | `--no-keep-awake` | Don't stop the Mac from sleeping |
 | `--config PATH` | Use this config file instead of the default one |
 
@@ -132,9 +137,10 @@ On an M1 Pro, `large-v3-turbo` transcribes about 6x faster than realtime, so a 6
 | Command | Description |
 | --- | --- |
 | `meetscribe devices` | List audio input devices with their numbers, marking the system default |
+| `meetscribe speakers <transcript>` | Name the speakers of a transcript; their voices are remembered for the series, see [Naming speakers](#naming-speakers) |
 | `meetscribe recover <file>` | Rebuild the transcript of a live session that ended unexpectedly, see [Crashes](#crashes-and-recover) |
 | `meetscribe config` | Show the settings in effect and which config file they come from |
-| `meetscribe download-model [--model M]` | Download the model ahead of time (e.g. before a meeting without internet) |
+| `meetscribe download-model [--model M] [--speakers]` | Download the model ahead of time (e.g. before a meeting without internet). `--speakers` also downloads the speaker model and checks access to it |
 
 ## Output
 
@@ -143,6 +149,7 @@ On an M1 Pro, `large-v3-turbo` transcribes about 6x faster than realtime, so a 6
 ├── prompt.txt                                  # optional, see Prompts
 ├── weekly-team/
 │   ├── prompt.txt                              # optional, for this series
+│   ├── speakers.json                           # remembered voices, see Naming speakers
 │   ├── 2026-11-02_14-00_weekly-team.md
 │   ├── 2026-11-02_14-00_weekly-team.txt
 │   ├── 2026-11-02_14-00_weekly-team.json
@@ -175,6 +182,95 @@ The Markdown transcript:
 ```
 
 Sentences are grouped into paragraphs, with a new paragraph after a pause of 2 seconds, after a minute, or when the language changes. In meetings with several languages, paragraphs in other languages than the main one are marked like `*(en)*`.
+
+## Speaker recognition
+
+Optionally, meetscribe finds out who said what, even from a single laptop microphone:
+
+```markdown
+- **Speakers:** Anna 43%, Eddy 31%, Speaker 3 26%
+
+**[00:00:00] Anna:** Guten Morgen zusammen. Als erstes schauen wir auf die Pendenzen.
+
+**[00:00:08] Eddy:** Die Offerte für den neuen Server ist da.
+
+**[00:00:15] Speaker 3:** Das ist zu viel. Können wir nicht verhandeln?
+```
+
+It uses [pyannote](https://github.com/pyannote/pyannote-audio)'s `speaker-diarization-community-1` model, locally like everything else. Turn it on per meeting with `--speakers` (or `--num-speakers N`), or always with `enabled = true` under `[speakers]` in the config.
+
+- **Live mode:** the transcript appears live as usual, without names. When the meeting ends, the speakers are recognized from the recording and added (roughly 4 minutes per hour of meeting on an M1 Pro)
+- **File mode:** after transcribing
+- The header shows each speaker's share of the speaking time
+- If recognition fails, the transcript is saved without speakers, never lost
+
+### Setup
+
+The model is free, but you have to accept its terms on Hugging Face once:
+
+1. Log in to (or create a free account on) [huggingface.co](https://huggingface.co), open [pyannote/speaker-diarization-community-1](https://hf.co/pyannote/speaker-diarization-community-1) and fill in and submit the form to get access
+2. Create an access token of type **Read** on [hf.co/settings/tokens](https://hf.co/settings/tokens). A "Fine-grained" token works only with "Read access to contents of all public gated repos you can access" ticked
+3. Log in on your Mac and paste the token:
+
+   ```bash
+   uvx --from huggingface_hub hf auth login
+   ```
+
+4. Check that it works (this also downloads the model, about 65 MB):
+
+   ```bash
+   meetscribe download-model --speakers
+   ```
+
+After that, no internet connection is needed. If the setup is missing, meetscribe says so before the meeting starts, not after it.
+
+### Naming speakers
+
+At first, speakers are called "Speaker 1", "Speaker 2", ... After a meeting, name them once:
+
+```bash
+meetscribe speakers ~/Documents/meetscribe/weekly-team/2026-11-09_14-00_weekly-team.md
+```
+
+```
+==> Who is who? Enter a name, Enter to keep, - to remove a name, q to quit
+
+Speaker 1  43% of the speaking time (00:15)
+  [00:00:00] Guten Morgen zusammen. Ich eröffne unseren Jour fixe. Als erstes schauen wir auf…
+  [00:00:31] Gut, dann übernimmst du das Sommerfest, und Eddy kümmert sich um den Server.
+Name: Anna
+...
+✓ Remembered the voices of Anna, Eddy for this series (.../weekly-team/speakers.json)
+```
+
+- The transcript files are updated with the names
+- The voices are remembered in `speakers.json` in the series folder. In the next meeting of the same series, they're **recognized automatically**: the summary shows `Anna: 43% (recognized, similarity 0.91)`. Only new people stay "Speaker N"
+- Run `meetscribe speakers` again after a meeting to confirm the names (Enter keeps them). Every confirmed meeting improves the remembered voice
+- Give two speakers the same name to merge them, when one person was split in two
+- Without a terminal: `meetscribe speakers <transcript> --set 1=Anna --set 2=Eddy`
+- To forget a voice, delete its entry from `speakers.json`
+
+### How accurate is it?
+
+With one microphone for the whole room, expect most but not all of the text to get the right speaker. In tests with four synthetic voices (two of them similar male voices) in a 4-minute meeting:
+
+| Setting | Speaking time with the right speaker |
+| --- | --- |
+| Number of people detected automatically | 78% (the two similar voices were merged into one) |
+| `--num-speakers 4` | 93% |
+
+So **tell meetscribe how many people there are** (`--num-speakers` or `num_speakers` in the config) when you know it, or at least `max_speakers`. Real voices usually differ more than synthetic ones, and longer meetings give the model more to learn each voice from, but no test with real meetings has been done yet.
+
+What goes wrong most often:
+
+- **Short answers right after someone else** ("Ja, das mache ich", "Nein") are often given to the previous speaker
+- Similar voices get merged when the number of people isn't given
+- People talking at the same time: each word gets only one speaker
+- People sitting far from the microphone
+
+A USB conference microphone in the middle of the table helps. It's still one track, but everyone is about equally loud.
+
+Under the hood: Whisper also returns the time of every word, each word gets the speaker that pyannote found at that moment, and sentences are split where the speaker changes (a single word that seems to belong to someone else in the middle of a turn is ignored as a timing glitch).
 
 ## Languages
 
@@ -244,6 +340,10 @@ The file is [TOML](https://toml.io). Every value is checked when the file is loa
 | `vad.live_max_utterance_s` | `20.0` | Longest utterance in live mode before it's cut (shorter = text sooner during monologues) |
 | `vad.file_max_utterance_s` | `30.0` | Longest utterance in file mode (Whisper works on up to 30 s) |
 | `live.keep_awake` | `true` | Keep the Mac awake while recording. Overridden by `--no-keep-awake` |
+| `speakers.enabled` | `false` | Recognize who said what. Overridden by `--speakers` / `--no-speakers` |
+| `speakers.num_speakers` | `0` | Number of people, if known (`0` = detect). Overridden by `--num-speakers` |
+| `speakers.max_speakers` | `0` | The most people expected (`0` = no limit) |
+| `speakers.match_threshold` | `0.6` | How similar (0–1) a voice must be to a remembered one to get its name. Lower it if known people stay "Speaker N", raise it if names get mixed up |
 
 Example `meetscribe.toml` for German-only meetings with a USB conference mic:
 
@@ -264,6 +364,7 @@ device = "Jabra"
 4. **Transcription:** mlx-whisper transcribes the utterance on the GPU, with the prompt and the end of the previous utterance as context
 5. **Filtering:** text Whisper is known to invent in silence ("Untertitel im Auftrag des ZDF", "Vielen Dank fürs Zuschauen", ...) and text placed after the end of the audio are dropped
 6. **Output:** segments get timestamps on the meeting's timeline and are written to the transcript files
+7. **Speakers** (optional): after the transcription, see [Speaker recognition](#speaker-recognition)
 
 Live and file mode use the same steps, so a live transcript and a later re-transcription of the same recording are directly comparable.
 
@@ -298,8 +399,8 @@ This fixes the WAV header, rebuilds the transcript from the journal (marked as r
 ## Development
 
 ```bash
-uv sync                  # creates .venv with dev tools
-uv run pytest            # tests: naming, config, VAD cuts, rendering, journal, WAV repair
+uv sync --extra speakers # creates .venv with dev tools (and speaker recognition)
+uv run pytest            # tests: naming, config, VAD cuts, rendering, journal, WAV repair, speakers
 uv run ruff check .      # lint
 uv run meetscribe ...    # run from the checkout
 ```
@@ -321,6 +422,7 @@ The tests only cover logic that needs no microphone or model, so they run in und
 | `src/meetscribe/vad.py` | Cutting audio into utterances |
 | `src/meetscribe/backends/` | Transcription backends behind a small interface (`base.py`). `mlx.py` for Apple Silicon |
 | `src/meetscribe/audio/` | Devices, microphone permission, recording, crash-safe WAV, decoding |
+| `src/meetscribe/speakers/` | Speaker recognition: diarization (`diarize.py`), assigning speakers to words (`align.py`), remembered voices (`profiles.py`), naming (`naming.py`) |
 | `src/meetscribe/transcript.py` | Transcript model and md/txt/json output |
 | `src/meetscribe/journal.py` | Live session journal (crash safety) |
 | `src/meetscribe/naming.py` | Folder and file names |
@@ -331,7 +433,7 @@ The tests only cover logic that needs no microphone or model, so they run in und
 
 Not built yet, but the structure is ready for it:
 
-- **Speaker diarization** (who said what): a post-processing step on the json transcript and the WAV
+- **Speakers in live mode**: names while the meeting runs, not only afterwards
 - **Meeting minutes** with decisions and action items, generated by an LLM, using the previous meeting of the same series (the newest transcript in the series folder) as context
 - **Menu bar app or small web UI** driving `LiveSession`
 - **Linux support** with a faster-whisper backend

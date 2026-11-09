@@ -59,6 +59,11 @@ class Config:
     file_max_utterance_s: float = 30.0
     # [live]
     keep_awake: bool = True
+    # [speakers]
+    speakers: bool = False
+    num_speakers: int = 0
+    max_speakers: int = 0
+    match_threshold: float = 0.6
 
     source: Path | None = None  # the config file that was loaded, if any
 
@@ -179,6 +184,13 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("vad", "file_max_utterance_s", "file_max_utterance_s", _float,
             lambda v: 3 <= v <= 30, "seconds between 3 and 30, like 30"),
     Setting("live", "keep_awake", "keep_awake", _bool, lambda v: True, "true or false"),
+    Setting("speakers", "enabled", "speakers", _bool, lambda v: True, "true or false"),
+    Setting("speakers", "num_speakers", "num_speakers", _int, lambda v: 0 <= v <= 30,
+            "the number of people, or 0 to detect it"),
+    Setting("speakers", "max_speakers", "max_speakers", _int, lambda v: 0 <= v <= 30,
+            "the most people expected, or 0 for no limit"),
+    Setting("speakers", "match_threshold", "match_threshold", _float, lambda v: 0 < v < 1,
+            "a similarity between 0 and 1, like 0.6"),
 )
 
 

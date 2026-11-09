@@ -13,9 +13,16 @@ and all calls must happen on the same thread.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
+
+
+@dataclass
+class Word:
+    start: float
+    end: float
+    text: str  # as Whisper writes it, usually with a leading space
 
 
 @dataclass
@@ -26,18 +33,26 @@ class Segment:
     language: str | None = None
     no_speech_prob: float = 0.0
     avg_logprob: float = 0.0
+    speaker: str | None = None  # id like "S1", see transcript.Speaker
+    # Word timings, only when speaker recognition needs them. Kept in memory,
+    # not saved: they're used to split segments where the speaker changes.
+    words: list[Word] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "start": round(self.start, 2),
             "end": round(self.end, 2),
             "text": self.text,
             "language": self.language,
         }
+        if self.speaker:
+            d["speaker"] = self.speaker
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> Segment:
-        return cls(float(d["start"]), float(d["end"]), str(d["text"]), d.get("language"))
+        return cls(float(d["start"]), float(d["end"]), str(d["text"]), d.get("language"),
+                   speaker=d.get("speaker"))
 
 
 class Transcriber(ABC):
@@ -60,8 +75,10 @@ class Transcriber(ABC):
         """Probability of each language code for this audio."""
 
     @abstractmethod
-    def transcribe(self, audio: np.ndarray, language: str, prompt: str | None) -> list[Segment]:
-        """Segments with times relative to the start of `audio`."""
+    def transcribe(self, audio: np.ndarray, language: str, prompt: str | None,
+                   words: bool = False) -> list[Segment]:
+        """Segments with times relative to the start of `audio`, with word timings
+        if words is True."""
 
 
 def get_backend(name: str, model: str) -> Transcriber:

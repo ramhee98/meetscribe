@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from meetscribe.backends.base import Segment, Transcriber
+from meetscribe.backends.base import Segment, Transcriber, Word
 from meetscribe.console import die
 
 # Short names for the converted models on https://huggingface.co/mlx-community
@@ -103,7 +103,8 @@ class MlxWhisper(Transcriber):
         _, probs = self._model.detect_language(segment)
         return {k: float(v) for k, v in probs.items()}
 
-    def transcribe(self, audio: np.ndarray, language: str, prompt: str | None) -> list[Segment]:
+    def transcribe(self, audio: np.ndarray, language: str, prompt: str | None,
+                   words: bool = False) -> list[Segment]:
         import mlx_whisper
 
         result = mlx_whisper.transcribe(
@@ -112,6 +113,7 @@ class MlxWhisper(Transcriber):
             language=language,
             initial_prompt=prompt or None,
             condition_on_previous_text=False,
+            word_timestamps=words,
             verbose=None,
         )
         return [
@@ -122,6 +124,8 @@ class MlxWhisper(Transcriber):
                 language=language,
                 no_speech_prob=float(s.get("no_speech_prob", 0.0)),
                 avg_logprob=float(s.get("avg_logprob", 0.0)),
+                words=[Word(float(w["start"]), float(w["end"]), w["word"])
+                       for w in s.get("words", [])],
             )
             for s in result["segments"]
         ]

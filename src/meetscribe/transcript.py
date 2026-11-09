@@ -59,9 +59,48 @@ class Meta:
 
 
 @dataclass
+class Speaker:
+    id: str  # S1, S2, ... in order of first appearance
+    name: str | None = None  # set by voice profiles or 'meetscribe speakers'
+    embedding: list[float] | None = None  # voice embedding, for naming later
+    remembered: bool = False  # this meeting's voice is in the series' voice profiles
+
+    @property
+    def number(self) -> int:
+        return int(self.id[1:]) if self.id[1:].isdigit() else 0
+
+    @property
+    def label(self) -> str:
+        return self.name or f"Speaker {self.number}"
+
+    def to_dict(self) -> dict:
+        d: dict = {"name": self.name}
+        if self.remembered:
+            d["remembered"] = True
+        if self.embedding is not None:
+            d["embedding"] = [round(float(x), 6) for x in self.embedding]
+        return d
+
+
+@dataclass
 class Transcript:
     meta: Meta
     segments: list[Segment] = field(default_factory=list)
+    speakers: dict[str, Speaker] = field(default_factory=dict)
+
+    def speaker_label(self, sid: str | None) -> str | None:
+        if not sid:
+            return None
+        sp = self.speakers.get(sid)
+        return sp.label if sp else sid
+
+    def talk_time(self) -> dict[str, float]:
+        """Speaking time per speaker id, most first."""
+        times: Counter[str] = Counter()
+        for s in self.segments:
+            if s.speaker:
+                times[s.speaker] += max(s.end - s.start, 0.0)
+        return dict(times.most_common())
 
     @property
     def languages(self) -> list[str]:
@@ -83,6 +122,7 @@ class Transcript:
                 cur = out[-1]
                 if (s.start - cur[-1].end < PARAGRAPH_GAP_S
                         and s.language == cur[-1].language
+                        and s.speaker == cur[-1].speaker
                         and s.end - cur[0].start <= PARAGRAPH_MAX_S):
                     cur.append(s)
                     continue
@@ -90,11 +130,19 @@ class Transcript:
         return out
 
     def to_dict(self) -> dict:
-        return {"meta": self.meta.to_dict(), "segments": [s.to_dict() for s in self.segments]}
+        d: dict = {"meta": self.meta.to_dict()}
+        if self.speakers:
+            d["speakers"] = {sid: sp.to_dict() for sid, sp in self.speakers.items()}
+        d["segments"] = [s.to_dict() for s in self.segments]
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> Transcript:
-        return cls(Meta.from_dict(d["meta"]), [Segment.from_dict(s) for s in d["segments"]])
+        speakers = {sid: Speaker(sid, sp.get("name"), sp.get("embedding"),
+                                 bool(sp.get("remembered")))
+                    for sid, sp in d.get("speakers", {}).items()}
+        return cls(Meta.from_dict(d["meta"]), [Segment.from_dict(s) for s in d["segments"]],
+                   speakers)
 
 
 # --- Rendering ----------------------------------------------------------------
@@ -117,6 +165,16 @@ def _language_line(t: Transcript) -> str:
     return ", ".join(t.languages) or t.meta.language
 
 
+def _speakers_line(t: Transcript) -> str | None:
+    """'Anna 45%, Speaker 2 30%, Ramon 25%' (share of the speaking time)."""
+    times = t.talk_time()
+    total = sum(times.values())
+    if not total:
+        return None
+    return ", ".join(f"{t.speaker_label(sid)} {round(100 * v / total)}%"
+                     for sid, v in times.items())
+
+
 def _status_note(meta: Meta) -> str | None:
     if meta.status == RECORDING:
         return (f"Recording in progress since {meta.start:%H:%M}. "
@@ -135,12 +193,23 @@ def _para_text(t: Transcript, para: list[Segment], main: str | None, md: bool) -
     return text
 
 
+def _para_head(t: Transcript, para: list[Segment], md: bool) -> str:
+    """'**[00:01:23] Anna:**' / '[00:01:23] Anna:', or just the time without speakers."""
+    stamp = f"[{format_timestamp(para[0].start)}]"
+    who = t.speaker_label(para[0].speaker)
+    head = f"{stamp} {who}:" if who else stamp
+    return f"**{head}**" if md else head
+
+
 def render_md(t: Transcript) -> str:
     m = t.meta
     lines = [f"# {_heading(m)}", ""]
     lines.append(f"- **Date:** {_when(m)}")
     lines.append(f"- **Duration:** {format_duration(m.duration)}")
     lines.append(f"- **Language:** {_language_line(t)}")
+    speakers = _speakers_line(t)
+    if speakers:
+        lines.append(f"- **Speakers:** {speakers}")
     lines.append(f"- **Model:** {_model(m)}")
     if m.audio:
         lines.append(f"- **Recording:** [{m.audio}]({m.audio.replace(' ', '%20')})")
@@ -152,7 +221,7 @@ def render_md(t: Transcript) -> str:
     lines += ["", "## Transcript", ""]
     main = t.languages[0] if len(t.languages) > 1 else None
     for para in t.paragraphs():
-        lines.append(f"**[{format_timestamp(para[0].start)}]** {_para_text(t, para, main, True)}")
+        lines.append(f"{_para_head(t, para, True)} {_para_text(t, para, main, True)}")
         lines.append("")
     if not t.segments:
         lines += ["*No speech transcribed yet.*", ""]
@@ -163,13 +232,16 @@ def render_txt(t: Transcript) -> str:
     m = t.meta
     lines = [_heading(m), f"{_when(m)} · {format_duration(m.duration)}",
              f"Language: {_language_line(t)} · Model: {_model(m)}"]
+    speakers = _speakers_line(t)
+    if speakers:
+        lines.append(f"Speakers: {speakers}")
     note = _status_note(m)
     if note:
         lines.append(note)
     lines.append("")
     main = t.languages[0] if len(t.languages) > 1 else None
     for para in t.paragraphs():
-        lines.append(f"[{format_timestamp(para[0].start)}] {_para_text(t, para, main, False)}")
+        lines.append(f"{_para_head(t, para, False)} {_para_text(t, para, main, False)}")
         lines.append("")
     return "\n".join(lines)
 

@@ -88,8 +88,11 @@ def run_file(cfg: Config, path: Path, name: str | None, cli_prompt: str | None) 
     detail("Language", cfg.language_mode)
     if prompt:
         detail("Prompt", f"{prompt[:60]}{'…' if len(prompt) > 60 else ''} ({prompt_src})")
+    if cfg.speakers:
+        detail("Speakers", speakers_setting(cfg))
     detail("Output", str(base.parent))
 
+    diarizer = load_diarizer(cfg) if cfg.speakers else None  # fails early, before the work
     t_start = time.monotonic()
     audio = load_audio(path)
     audio_s = len(audio) / 16000
@@ -98,7 +101,7 @@ def run_file(cfg: Config, path: Path, name: str | None, cli_prompt: str | None) 
 
     info("Loading model")
     backend.load()
-    pipeline = Pipeline(backend, cfg.language, cfg.languages, prompt)
+    pipeline = Pipeline(backend, cfg.language, cfg.languages, prompt, words=cfg.speakers)
     segmenter = Segmenter(
         silero_speech_prob(),
         threshold=cfg.vad_threshold,
@@ -131,6 +134,8 @@ def run_file(cfg: Config, path: Path, name: str | None, cli_prompt: str | None) 
     ok(f"Transcribing done ({format_duration(elapsed)})")
 
     base.parent.mkdir(parents=True, exist_ok=True)
+    if diarizer is not None:
+        add_speakers(transcript, audio, diarizer, cfg, base.parent)
     written = write_outputs(base, transcript, cfg.formats)
 
     total = time.monotonic() - t_start
@@ -146,7 +151,52 @@ def run_file(cfg: Config, path: Path, name: str | None, cli_prompt: str | None) 
         detail("Languages", ", ".join(transcript.languages))
     for p in written:
         detail("Saved", str(p))
+    naming_hint(transcript, written)
     return 0
+
+
+def speakers_setting(cfg: Config) -> str:
+    if cfg.num_speakers:
+        return f"on ({cfg.num_speakers} people)"
+    if cfg.max_speakers:
+        return f"on (up to {cfg.max_speakers} people)"
+    return "on"
+
+
+def load_diarizer(cfg: Config):
+    from meetscribe.speakers.diarize import Diarizer
+
+    diarizer = Diarizer(cfg.num_speakers, cfg.max_speakers)
+    info("Loading speaker recognition")
+    diarizer.load()
+    return diarizer
+
+
+def add_speakers(transcript: Transcript, audio, diarizer, cfg: Config, folder: Path) -> bool:
+    """Speaker recognition on a finished transcript. A failure only costs the
+    speaker labels, never the transcript."""
+    from meetscribe.speakers.recognize import recognize, report
+
+    if not transcript.segments:
+        return False
+    try:
+        result = recognize(transcript, audio, diarizer, folder, cfg.match_threshold)
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        warn(f"Speaker recognition failed, saving the transcript without speakers: {e}")
+        return False
+    report(transcript, result)
+    return True
+
+
+def naming_hint(transcript: Transcript, written: list[Path]) -> None:
+    unnamed = [sp for sp in transcript.speakers.values() if not sp.name]
+    if not unnamed or not written:
+        return
+    console.emit()
+    console.emit(f"{console.DIM}Give the speakers names (remembered for this series):{console.OFF}")
+    console.emit(f'  meetscribe speakers "{written[0]}"')
 
 
 def _progress(fraction: float, since: float) -> None:

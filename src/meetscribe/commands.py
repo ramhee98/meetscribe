@@ -115,14 +115,102 @@ def _dur(seconds: float) -> str:
     return format_duration(seconds)
 
 
-def download_model(cfg: Config) -> int:
+def download_model(cfg: Config, speakers: bool = False) -> int:
+    """Download the transcription model, and the speaker model if speakers is on."""
     if cfg.backend == "mlx":
         from meetscribe.backends import mlx
 
         if mlx.cached_path(cfg.model):
             ok(f"Model {cfg.model} already downloaded")
-            return 0
-        info(f"Downloading model {cfg.model} ({mlx.resolve_model(cfg.model)})")
-        path = mlx.download(cfg.model)
-        ok(f"Model downloaded to {path}")
+        else:
+            info(f"Downloading model {cfg.model} ({mlx.resolve_model(cfg.model)})")
+            path = mlx.download(cfg.model)
+            ok(f"Model downloaded to {path}")
+    if speakers or cfg.speakers:
+        from meetscribe.speakers.diarize import MODEL, Diarizer
+
+        info(f"Checking speaker recognition ({MODEL})")
+        d = Diarizer()
+        d.load()
+        ok(f"Speaker recognition ready (runs on {'the GPU' if d.device == 'mps' else 'the CPU'})")
     return 0
+
+# --- speakers -------------------------------------------------------------------
+
+QUOTES = 2
+QUOTE_CHARS = 110
+
+
+def name_speakers(cfg: Config, path: Path, assignments: list[str]) -> int:
+    """Name the speakers of a transcript and remember their voices for the series."""
+    import sys
+
+    from meetscribe.speakers.naming import apply_names, parse_assignment, remember_voices
+    from meetscribe.transcript import read_transcript, write_outputs
+
+    base = _session_base(path)
+    json_path = base.with_name(base.name + ".json")
+    if not json_path.is_file():
+        die(f"No meetscribe transcript found for {path}")
+    t = read_transcript(json_path)
+    if not t.speakers:
+        source = t.meta.audio and base.with_name(t.meta.audio) or t.meta.source or "<recording>"
+        die("This transcript has no speakers yet. Recognize them by transcribing again with "
+            f"speaker recognition:\n  meetscribe file \"{source}\" --speakers --overwrite")
+
+    if assignments:
+        names = {}
+        for a in assignments:
+            try:
+                sid, name = parse_assignment(a, t)
+            except ValueError as e:
+                die(str(e))
+            names[sid] = name
+    else:
+        if not sys.stdin.isatty():
+            die("Give names with --set, e.g. --set 1=Anna --set 2=Ramon (or run it in a terminal)")
+        names = _ask_names(t)
+
+    merged = apply_names(t, names)
+    saved, profiles_path = remember_voices(t, json_path.parent)
+    write_outputs(base, t, cfg.formats)
+    for keep, gone in merged:
+        info(f"Merged {gone} into {keep}: same name, so the same person")
+    ok(f"Saved the names in {base.name}.*")
+    if saved:
+        ok(f"Remembered the voices of {', '.join(saved)} for this series "
+           f"({profiles_path})")
+        emit(f"{DIM}Next time, they're recognized automatically.{OFF}")
+    return 0
+
+
+def _ask_names(t) -> dict[str, str | None]:
+    from meetscribe.console import format_duration, format_timestamp
+
+    times = t.talk_time()
+    total = sum(times.values()) or 1.0
+    info("Who is who? Enter a name, Enter to keep, - to remove a name, q to quit")
+    names: dict[str, str | None] = {}
+    for sid, secs in times.items():
+        sp = t.speakers[sid]
+        emit()
+        emit(f"{BOLD}{sp.label}{OFF}  {DIM}{round(100 * secs / total)}% of the speaking time "
+             f"({format_duration(secs)}){OFF}")
+        quotes = sorted((s for s in t.segments if s.speaker == sid),
+                        key=lambda s: len(s.text), reverse=True)[:QUOTES]
+        for q in sorted(quotes, key=lambda s: s.start):
+            text = q.text if len(q.text) <= QUOTE_CHARS else q.text[: QUOTE_CHARS - 1] + "…"
+            emit(f"  {DIM}[{format_timestamp(q.start)}]{OFF} {text}")
+        current = f" [{sp.name}]" if sp.name else ""
+        try:
+            answer = input(f"Name{current}: ").strip()
+        except EOFError:
+            answer = "q"
+        if answer.lower() == "q":
+            die("Quit, nothing saved")
+        if answer == "-":
+            names[sid] = None
+        elif answer:
+            names[sid] = answer
+    emit()
+    return names

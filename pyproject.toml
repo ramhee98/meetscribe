@@ -15,6 +15,10 @@ dependencies = [
     "pyobjc-framework-AVFoundation>=10; sys_platform == 'darwin'",
 ]
 
+[project.optional-dependencies]
+# Speaker recognition (who said what). Enable with ./install.sh or 'uv sync --extra speakers'.
+speakers = ["pyannote.audio>=4.0.7"]
+
 [project.scripts]
 meetscribe = "meetscribe.cli:main"
 

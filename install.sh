@@ -3,7 +3,9 @@
 # meetscribe installer: installs dependencies and the meetscribe command,
 # creates meetscribe.toml and downloads the configured model. Safe to run again.
 #
-# Usage: ./install.sh
+# Usage: ./install.sh [--speakers | --no-speakers]
+#   --speakers      also install speaker recognition (who said what) without asking
+#   --no-speakers   install without it, or remove it again
 
 set -euo pipefail
 
@@ -26,6 +28,16 @@ die()   { printf '%sError:%s %s\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
 step()  { printf '\n%s[%s/%s]%s %s%s%s\n' "$C_BLUE" "$1" "$STEPS" "$C_OFF" "$C_BOLD" "$2" "$C_OFF"; }
 
 trap 'echo; warn "Aborted"; exit 130' INT
+
+SPEAKERS=""  # yes / no / empty = ask (or keep what's installed)
+for arg in "$@"; do
+    case "$arg" in
+        --speakers) SPEAKERS=yes ;;
+        --no-speakers) SPEAKERS=no ;;
+        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        *) die "Unknown option: $arg (see ./install.sh --help)" ;;
+    esac
+done
 
 # --- 1. Platform --------------------------------------------------------------
 
@@ -76,10 +88,35 @@ done
 # --- 4. meetscribe command ----------------------------------------------------
 
 step 4 "Installing the meetscribe command"
+
+# Speaker recognition is optional: about 200 MB more, and a Hugging Face account.
+speakers_installed() {
+    local py
+    py="$(uv tool dir 2>/dev/null)/meetscribe/bin/python"
+    [[ -x "$py" ]] && "$py" -c "import pyannote.audio" >/dev/null 2>&1
+}
+if [[ -z "$SPEAKERS" ]]; then
+    if speakers_installed; then
+        SPEAKERS=yes
+        ok "Keeping speaker recognition (remove it with ./install.sh --no-speakers)"
+    elif [[ -t 0 ]]; then
+        echo "Speaker recognition finds out who said what (optional, about 200 MB more,"
+        echo "needs a free Hugging Face account, see the README)."
+        read -r -p "Install speaker recognition? [y/N] " answer || { echo; die "Aborted"; }
+        [[ "$answer" =~ ^[yYjJ] ]] && SPEAKERS=yes || SPEAKERS=no
+    else
+        SPEAKERS=no
+    fi
+fi
+
 # uv brings its own Python (the one macOS ships is too old), and installs
 # meetscribe as an editable tool: changes in this folder take effect right away.
 info "This downloads Python and the libraries (about 1 GB) the first time"
-uv tool install --quiet --force --editable "$SCRIPT_DIR"
+if [[ "$SPEAKERS" == yes ]]; then
+    uv tool install --quiet --force --editable "${SCRIPT_DIR}[speakers]"
+else
+    uv tool install --quiet --force --editable "$SCRIPT_DIR"
+fi
 TOOL_BIN="$(uv tool dir --bin)"
 if command -v meetscribe >/dev/null 2>&1; then
     ok "meetscribe installed ($(command -v meetscribe))"
@@ -149,8 +186,16 @@ fi
 
 # --- 7. Model download ---------------------------------------------------------
 
-step 7 "Downloading model"
-meetscribe download-model --config "$CONFIG"
+step 7 "Downloading models"
+if [[ "$SPEAKERS" == yes ]]; then
+    # The speaker model needs the one-time Hugging Face setup. If it's not done yet,
+    # this shows how, and the installation goes on: everything else works without it.
+    if ! meetscribe download-model --speakers --config "$CONFIG"; then
+        warn "Speaker recognition isn't ready yet. Do the setup above, then run ./install.sh again."
+    fi
+else
+    meetscribe download-model --config "$CONFIG"
+fi
 
 # --- Done ---------------------------------------------------------------------
 
@@ -165,6 +210,7 @@ Usage:
 
 The first time you record, macOS asks whether your terminal app may use the
 microphone. Click Allow.
+$( [[ "$SPEAKERS" == yes ]] && printf '\nWho said what: add --speakers (or set enabled = true under [speakers]),\nthen name the speakers once with: meetscribe speakers <transcript>\n' )
 
 Settings: ${CONFIG}
 EOF

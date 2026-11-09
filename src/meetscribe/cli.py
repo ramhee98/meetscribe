@@ -47,6 +47,12 @@ def _transcription(p: argparse.ArgumentParser) -> None:
                         "in the series folder, then the config)")
     p.add_argument("--output-dir", type=Path, metavar="DIR",
                    help="where transcripts go (default: ~/Documents/meetscribe)")
+    p.add_argument("--speakers", dest="speakers", action="store_true", default=None,
+                   help="recognize who said what (needs the speakers extra, see README)")
+    p.add_argument("--no-speakers", dest="speakers", action="store_false",
+                   help="don't recognize speakers, even if enabled in the config")
+    p.add_argument("--num-speakers", type=int, metavar="N",
+                   help="number of people in the meeting, if known (helps speaker recognition)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,11 +91,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path", type=Path, help="any file of the session (.wav, .md, .jsonl, ...)")
     _common(p)
 
+    p = sub.add_parser("speakers", help="name the speakers of a transcript",
+                       description="Name the speakers of a transcript made with --speakers. "
+                                   "Their voices are remembered for the meeting series, so the "
+                                   "next meeting gets the names automatically.")
+    p.add_argument("path", type=Path, help="the transcript (.md, .json, ...) or its recording")
+    p.add_argument("--set", dest="assignments", action="append", default=[], metavar="N=NAME",
+                   help="name speaker N without asking, e.g. --set 1=Anna (repeatable). "
+                        "Same name twice merges the speakers")
+    _common(p)
+
     p = sub.add_parser("config", help="show the settings in effect and where they come from")
     _common(p)
 
     p = sub.add_parser("download-model", help="download the configured model ahead of time")
     p.add_argument("--model", metavar="MODEL", help="model to download instead")
+    p.add_argument("--speakers", action="store_true", default=None,
+                   help="also download (and check access to) the speaker recognition model")
     _common(p)
     return parser
 
@@ -108,6 +126,12 @@ def _apply(cfg: Config, args: argparse.Namespace) -> Config:
         over["keep_awake"] = args.keep_awake
     if getattr(args, "overwrite", None):
         over["overwrite"] = True
+    if getattr(args, "speakers", None) is not None:
+        over["speakers"] = args.speakers
+    if getattr(args, "num_speakers", None) is not None:
+        over["num_speakers"] = args.num_speakers
+        if args.num_speakers and getattr(args, "speakers", None) is None:
+            over["speakers"] = True  # --num-speakers implies --speakers
     return cfg.with_overrides(**over)
 
 
@@ -135,6 +159,10 @@ def main(argv: list[str] | None = None) -> int:
             from meetscribe.commands import recover
 
             return recover(cfg, args.path)
+        if args.command == "speakers":
+            from meetscribe.commands import name_speakers
+
+            return name_speakers(cfg, args.path, args.assignments)
         if args.command == "config":
             from meetscribe.commands import show_config
 
@@ -142,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "download-model":
             from meetscribe.commands import download_model
 
-            return download_model(cfg)
+            return download_model(cfg, bool(args.speakers))
     except Fatal as e:
         console.clear_status()
         console.error(str(e))

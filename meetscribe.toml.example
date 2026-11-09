@@ -74,3 +74,21 @@ file_max_utterance_s = 30.0
 # Keep the Mac from sleeping while recording (with caffeinate). Closing the lid
 # still sleeps it, unless an external display is connected.
 keep_awake = true
+
+[speakers]
+# Recognize who said what (speaker diarization with pyannote). Needs the optional
+# install (./install.sh asks) and a one-time Hugging Face setup, see the README.
+# Speakers are added after the meeting; live text shows without names.
+# Override with --speakers / --no-speakers.
+enabled = false
+
+# Number of people in the meeting, if you know it. Helps a lot: voices that sound
+# alike are less often merged into one speaker. 0 = detect. Override with --num-speakers.
+num_speakers = 0
+
+# The most people you expect, when the exact number varies. 0 = no limit.
+max_speakers = 0
+
+# How similar (0-1) a voice must be to a remembered voice of the series to get its
+# name. Lower it if known people stay "Speaker N", raise it if names get mixed up.
+match_threshold = 0.6

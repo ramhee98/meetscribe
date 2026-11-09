@@ -131,7 +131,7 @@ class FakeBackend:
     def language_probs(self, audio):
         return {"en": 0.9, "de": 0.1} if audio[0] > 0 else {"de": 0.9, "en": 0.1}
 
-    def transcribe(self, audio, language, prompt):
+    def transcribe(self, audio, language, prompt, words=False):
         self.prompts.append(prompt)
         return [Segment(0.25, 1.5, f"text in {language}", language)]
 

@@ -52,8 +52,9 @@ def choose_language(probs: dict[str, float], allowed: tuple[str, ...]) -> str:
 
 class Pipeline:
     def __init__(self, backend: Transcriber, language: str, languages: tuple[str, ...],
-                 prompt: str = ""):
+                 prompt: str = "", words: bool = False):
         self.backend = backend
+        self.words = words  # word timings, for speaker recognition
         self.language = language
         self.languages = languages
         self.prompt = prompt.strip()
@@ -82,7 +83,7 @@ class Pipeline:
     def process(self, utt: Utterance) -> list[Segment]:
         t0 = time.monotonic()
         lang = self._pick_language(utt)
-        raw = self.backend.transcribe(utt.audio, lang, self._build_prompt(lang))
+        raw = self.backend.transcribe(utt.audio, lang, self._build_prompt(lang), self.words)
         self.busy_seconds += time.monotonic() - t0
         self.audio_seconds += utt.duration
 
@@ -93,6 +94,9 @@ class Pipeline:
             seg.start = utt.start_s + max(seg.start, 0.0)
             seg.end = utt.start_s + min(seg.end, utt.duration)
             seg.end = max(seg.end, seg.start)
+            for w in seg.words:
+                w.start = utt.start_s + max(w.start, 0.0)
+                w.end = utt.start_s + min(w.end, utt.duration)
             seg.language = lang
             out.append(seg)
         if out:

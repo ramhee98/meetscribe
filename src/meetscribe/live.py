@@ -44,7 +44,13 @@ from meetscribe.console import (
     ok,
     warn,
 )
-from meetscribe.filemode import resolve_prompt
+from meetscribe.filemode import (
+    add_speakers,
+    load_diarizer,
+    naming_hint,
+    resolve_prompt,
+    speakers_setting,
+)
 from meetscribe.journal import Journal
 from meetscribe.naming import new_session_base, series_title, slugify
 from meetscribe.pipeline import Pipeline
@@ -75,7 +81,8 @@ class LiveSession:
                          backend=backend.name, model=cfg.model, language=cfg.language_mode,
                          device=device.name, audio=self.wav_path.name, status=RECORDING)
         self.transcript = Transcript(self.meta)
-        self.pipeline = Pipeline(backend, cfg.language, cfg.languages, prompt)
+        self.pipeline = Pipeline(backend, cfg.language, cfg.languages, prompt,
+                                 words=cfg.speakers)
         self.utterances: queue.Queue[Utterance | None] = queue.Queue()
         self.wav = CrashSafeWav(self.wav_path)
         self.journal = Journal(self.base.with_name(self.base.name + ".jsonl"), self.meta)
@@ -230,6 +237,8 @@ def run_live(cfg: Config, name: str | None, cli_prompt: str | None) -> int:
     device = resolve_device(cfg.device)
     check_microphone()
     prompt, prompt_src = resolve_prompt(cfg, series, cli_prompt)
+    # Loaded now, so a missing setup shows up before the meeting, not after it.
+    diarizer = load_diarizer(cfg) if cfg.speakers else None
 
     info(f"Loading model {cfg.model}")
     t0 = time.monotonic()
@@ -242,6 +251,8 @@ def run_live(cfg: Config, name: str | None, cli_prompt: str | None) -> int:
     detail("Language", cfg.language_mode)
     if prompt:
         detail("Prompt", f"{prompt[:60]}{'…' if len(prompt) > 60 else ''} ({prompt_src})")
+    if diarizer is not None:
+        detail("Speakers", speakers_setting(cfg) + ", recognized after the meeting")
     detail("Saving to", str(session.base.parent))
     emit(f"{DIM}Press Ctrl+C to end the meeting.{OFF}")
     emit()
@@ -288,8 +299,30 @@ def run_live(cfg: Config, name: str | None, cli_prompt: str | None) -> int:
         signal.signal(signal.SIGINT, old_handler)
         console.clear_status()
 
+    if diarizer is not None:
+        written = _recognize_speakers(session, diarizer, cfg) or written
+
     _summary(session, written)
+    naming_hint(session.transcript, written)
     return 0
+
+
+def _recognize_speakers(session: LiveSession, diarizer, cfg: Config) -> list[Path] | None:
+    """After the meeting: the transcript is already saved, this adds the speakers."""
+    from meetscribe.audio.decode import load_audio
+
+    try:
+        audio = load_audio(session.wav_path)
+        if not add_speakers(session.transcript, audio, diarizer, cfg, session.base.parent):
+            return None
+    except KeyboardInterrupt:
+        console.clear_status()
+        emit()
+        warn("Speaker recognition stopped. The transcript is saved without speakers. "
+             "To add them later:")
+        emit(f'  meetscribe file "{session.wav_path}" --speakers --overwrite')
+        return None
+    return write_outputs(session.base, session.transcript, cfg.formats)
 
 
 def _summary(session: LiveSession, written: list[Path]) -> None:
