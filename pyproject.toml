@@ -1,0 +1,38 @@
+[project]
+name = "meetscribe"
+version = "0.1.0"
+description = "Transcribe recurring meetings locally on macOS (Apple Silicon), live from the microphone or from a recording."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "sounddevice>=0.5",
+    "soxr>=0.5",
+    "pysilero-vad>=3.0",
+    # Apple Silicon backend. Other platforms will get faster-whisper later.
+    "mlx-whisper>=0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Microphone permission check.
+    "pyobjc-framework-AVFoundation>=10; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+meetscribe = "meetscribe.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+# SIM115: the WAV writer and journal keep their files open for the whole session.
+ignore = ["SIM115"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
