@@ -1,0 +1,76 @@
+# meetscribe configuration
+#
+# Copy this file to meetscribe.toml (next to it, in the project folder) and adjust it:
+#
+#     cp meetscribe.toml.example meetscribe.toml
+#
+# ~/.config/meetscribe/config.toml works too, and --config <path> loads any file.
+# Precedence: built-in defaults < config file < command-line options.
+# The values below are the built-in defaults. Delete what you don't change.
+
+[transcription]
+# Only mlx for now (Apple Silicon GPU). faster-whisper for Linux may follow.
+backend = "mlx"
+
+# Whisper model: tiny, base, small, medium, large-v3-turbo, large-v3, a Hugging Face
+# repo with an MLX Whisper model (e.g. "mlx-community/whisper-large-v3-turbo-q4"), or a
+# local folder. Downloaded on first use. large-v3 is slower but a bit more accurate;
+# use it to re-transcribe important meetings with 'meetscribe file'.
+model = "large-v3-turbo"
+
+# Spoken language: a code like "de" or "en", or "auto" to detect it for every
+# utterance (for meetings that switch between languages).
+language = "auto"
+
+# With language = "auto": only choose between these languages. Swiss German is
+# often detected as Dutch or Afrikaans without this. [] allows every language.
+languages = ["de", "en"]
+
+# Names and terms that come up in every meeting, to help Whisper spell them.
+# A prompt.txt in the series folder (or the output folder) takes priority,
+# and --prompt on the command line over both.
+prompt = ""
+
+[audio]
+# Input device: part of its name (e.g. "Jabra"), its number from
+# 'meetscribe devices', or "" for the system default.
+device = ""
+
+[output]
+# Where transcripts and recordings go. Each meeting series (--name) gets a folder.
+dir = "~/Documents/meetscribe"
+
+# Formats besides the json file, which is always written: "md", "txt".
+formats = ["md", "txt"]
+
+# false = 'meetscribe file' refuses to replace an existing transcript.
+# Override with --overwrite.
+overwrite = false
+
+[vad]
+# Voice activity detection (Silero) cuts the audio into utterances at pauses.
+# Each utterance is transcribed on its own; silence and noise are skipped.
+
+# How sure the model must be that a moment is speech (0-1). Lower it (e.g. 0.35)
+# if quiet speakers get cut off, raise it (e.g. 0.6) in noisy rooms.
+threshold = 0.5
+
+# Speech shorter than this (milliseconds) is ignored, e.g. clicks or coughs.
+min_speech_ms = 250
+
+# A pause this long (milliseconds) ends an utterance. Shorter = live text appears
+# sooner, longer = Whisper gets more context.
+min_silence_ms = 600
+
+# Extra audio kept before and after each utterance, so words aren't clipped.
+speech_pad_ms = 200
+
+# Longest utterance in seconds before it's cut, in live mode (shorter = text
+# appears sooner during long monologues) and in file mode (Whisper works on up to 30 s).
+live_max_utterance_s = 20.0
+file_max_utterance_s = 30.0
+
+[live]
+# Keep the Mac from sleeping while recording (with caffeinate). Closing the lid
+# still sleeps it, unless an external display is connected.
+keep_awake = true
